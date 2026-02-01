@@ -330,7 +330,7 @@ def search_messages(
 
     # Handle read/unread status
     if is_unread is not None:
-        query_parts.append("is:unread" if is_unread else "")
+        query_parts.append("is:unread" if is_unread else "is:read")
 
     # Handle labels
     if labels:

@@ -14,15 +14,21 @@ from mcp.server.fastmcp import FastMCP
 from mcp_gmail.config import settings
 from mcp_gmail.gmail import (
     create_draft,
+    get_draft,
     get_gmail_service,
     get_headers_dict,
     get_labels,
     get_message,
+    get_message_history,
     get_thread,
+    list_drafts,
     list_messages,
     modify_message_labels,
     parse_message_body,
     search_messages,
+    send_draft,
+    trash_message,
+    untrash_message,
 )
 from mcp_gmail.gmail import send_email as gmail_send_email
 
@@ -458,5 +464,178 @@ def get_emails(message_ids: list[str]) -> str:
         for i, (msg_id, error) in enumerate(error_emails, 1):
             result += f"\n--- Email {i} (ID: {msg_id}) ---\n"
             result += f"Error: {error}\n"
+
+    return result
+
+
+@mcp.tool()
+def trash_email(message_id: str) -> str:
+    """
+    Move an email to the trash. The email can be recovered later with untrash_email.
+
+    Args:
+        message_id: The Gmail message ID to trash
+
+    Returns:
+        Confirmation message
+    """
+    result = trash_message(service, message_id=message_id, user_id=settings.user_id)
+    headers = get_headers_dict(result)
+    subject = headers.get("Subject", "No Subject")
+
+    return f"""
+Message moved to trash:
+ID: {message_id}
+Subject: {subject}
+"""
+
+
+@mcp.tool()
+def untrash_email(message_id: str) -> str:
+    """
+    Remove an email from the trash, restoring it to its previous location.
+
+    Args:
+        message_id: The Gmail message ID to restore from trash
+
+    Returns:
+        Confirmation message
+    """
+    result = untrash_message(service, message_id=message_id, user_id=settings.user_id)
+    headers = get_headers_dict(result)
+    subject = headers.get("Subject", "No Subject")
+
+    return f"""
+Message restored from trash:
+ID: {message_id}
+Subject: {subject}
+"""
+
+
+@mcp.tool()
+def list_email_drafts(max_results: int = 10) -> str:
+    """
+    List draft emails in the mailbox.
+
+    Args:
+        max_results: Maximum number of drafts to return (default: 10)
+
+    Returns:
+        Formatted list of drafts with their IDs and content previews
+    """
+    drafts = list_drafts(service, user_id=settings.user_id, max_results=max_results)
+
+    if not drafts:
+        return "No drafts found."
+
+    result = f"Found {len(drafts)} drafts:\n"
+
+    for draft_info in drafts:
+        draft_id = draft_info.get("id")
+        draft = get_draft(service, draft_id=draft_id, user_id=settings.user_id)
+        message = draft.get("message", {})
+        headers = get_headers_dict(message)
+
+        to_header = headers.get("To", "Unknown")
+        subject = headers.get("Subject", "No Subject")
+        date = headers.get("Date", "Unknown Date")
+
+        result += f"\nDraft ID: {draft_id}\n"
+        result += f"To: {to_header}\n"
+        result += f"Subject: {subject}\n"
+        result += f"Date: {date}\n"
+
+    return result
+
+
+@mcp.tool()
+def get_email_draft(draft_id: str) -> str:
+    """
+    Get the full content of a draft email by its ID.
+
+    Args:
+        draft_id: The Gmail draft ID
+
+    Returns:
+        The formatted draft content
+    """
+    draft = get_draft(service, draft_id=draft_id, user_id=settings.user_id)
+    message = draft.get("message", {})
+    return format_message(message)
+
+
+@mcp.tool()
+def send_email_draft(draft_id: str) -> str:
+    """
+    Send an existing draft email.
+
+    Args:
+        draft_id: The Gmail draft ID to send
+
+    Returns:
+        Confirmation message with the sent email details
+    """
+    result = send_draft(service, draft_id=draft_id, user_id=settings.user_id)
+    message_id = result.get("id")
+
+    return f"""
+Draft sent successfully.
+Draft ID: {draft_id}
+Sent Message ID: {message_id}
+"""
+
+
+@mcp.tool()
+def get_mailbox_history(start_history_id: str, max_results: int = 100) -> str:
+    """
+    Get the history of changes to the mailbox since a given history ID.
+    Useful for tracking what has changed (new messages, label changes, deletions).
+
+    Args:
+        start_history_id: The history ID to start from (obtained from a previous message or history call)
+        max_results: Maximum number of history records to return (default: 100)
+
+    Returns:
+        Formatted history of mailbox changes
+    """
+    history = get_message_history(
+        service, history_id=start_history_id, user_id=settings.user_id, max_results=max_results
+    )
+
+    records = history.get("history", [])
+    if not records:
+        return f"No changes found since history ID {start_history_id}."
+
+    result = f"Found {len(records)} history records since ID {start_history_id}:\n"
+
+    for record in records:
+        record_id = record.get("id")
+        result += f"\n--- History Record {record_id} ---\n"
+
+        if "messagesAdded" in record:
+            for item in record["messagesAdded"]:
+                msg_id = item["message"]["id"]
+                result += f"  Message added: {msg_id}\n"
+
+        if "messagesDeleted" in record:
+            for item in record["messagesDeleted"]:
+                msg_id = item["message"]["id"]
+                result += f"  Message deleted: {msg_id}\n"
+
+        if "labelsAdded" in record:
+            for item in record["labelsAdded"]:
+                msg_id = item["message"]["id"]
+                labels = item.get("labelIds", [])
+                result += f"  Labels added to {msg_id}: {', '.join(labels)}\n"
+
+        if "labelsRemoved" in record:
+            for item in record["labelsRemoved"]:
+                msg_id = item["message"]["id"]
+                labels = item.get("labelIds", [])
+                result += f"  Labels removed from {msg_id}: {', '.join(labels)}\n"
+
+    next_history_id = history.get("historyId")
+    if next_history_id:
+        result += f"\nNext history ID: {next_history_id}\n"
 
     return result
