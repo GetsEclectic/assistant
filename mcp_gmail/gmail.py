@@ -42,6 +42,18 @@ def get_gmail_service(
     """
     Authenticate with Gmail API and return the service object.
 
+    Supports three authentication methods (checked in order):
+    1. MCP_GMAIL_TOKEN_JSON env var — JSON string of a previously obtained token.
+       Best for cloud/headless environments (e.g., Android Claude app).
+    2. token_path file — saved token from a previous OAuth flow.
+    3. Interactive OAuth flow — opens a browser for consent (requires credentials_path).
+
+    For cloud/headless setup:
+    1. Run the OAuth flow once locally to get a token.json file.
+    2. Copy its contents into the MCP_GMAIL_TOKEN_JSON environment variable.
+    3. Optionally set MCP_GMAIL_CREDENTIALS_JSON for the OAuth client config
+       (needed only if the token needs to be refreshed and no credentials file exists).
+
     Args:
         credentials_path: Path to the credentials JSON file
         token_path: Path to save/load the token
@@ -52,31 +64,49 @@ def get_gmail_service(
     """
     creds = None
 
-    # Look for token file with stored credentials
-    if os.path.exists(token_path):
+    # Method 1: Load token from environment variable (best for cloud/headless)
+    token_json_env = os.environ.get("MCP_GMAIL_TOKEN_JSON")
+    if token_json_env:
+        token_data = json.loads(token_json_env)
+        creds = Credentials.from_authorized_user_info(token_data)
+
+    # Method 2: Load token from file
+    if not creds and os.path.exists(token_path):
         with open(token_path, "r") as token:
             token_data = json.load(token)
             creds = Credentials.from_authorized_user_info(token_data)
 
-    # If credentials don't exist or are invalid, authenticate
+    # If credentials don't exist or are invalid, try to refresh or re-authenticate
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            # Check if credentials file exists
-            if not os.path.exists(credentials_path):
+            # Method 3: Interactive OAuth flow (requires browser)
+            # Check for credentials from env var first, then file
+            credentials_json_env = os.environ.get("MCP_GMAIL_CREDENTIALS_JSON")
+            if credentials_json_env:
+                client_config = json.loads(credentials_json_env)
+                flow = InstalledAppFlow.from_client_config(client_config, scopes)
+            elif os.path.exists(credentials_path):
+                flow = InstalledAppFlow.from_client_secrets_file(credentials_path, scopes)
+            else:
                 raise FileNotFoundError(
-                    f"Credentials file not found at {credentials_path}. "
-                    "Please download your OAuth credentials from Google Cloud Console."
+                    f"No authentication method available. Provide one of:\n"
+                    f"  1. MCP_GMAIL_TOKEN_JSON env var (recommended for cloud/headless)\n"
+                    f"  2. Token file at {token_path}\n"
+                    f"  3. OAuth credentials at {credentials_path} (for interactive flow)\n"
+                    f"See README.md for setup instructions."
                 )
 
-            flow = InstalledAppFlow.from_client_secrets_file(credentials_path, scopes)
             creds = flow.run_local_server(port=0)
 
-        # Save credentials for future runs
-        token_json = json.loads(creds.to_json())
-        with open(token_path, "w") as token:
-            json.dump(token_json, token)
+        # Save credentials for future runs (skip if no writable path)
+        try:
+            token_json = json.loads(creds.to_json())
+            with open(token_path, "w") as token:
+                json.dump(token_json, token)
+        except OSError:
+            pass  # Cloud environments may not have writable filesystem
 
     # Build the Gmail service
     return build("gmail", "v1", credentials=creds)

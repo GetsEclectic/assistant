@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "gmail": {
+      "command": "uv",
+      "args": ["run", "--directory", ".", "mcp-gmail"],
+      "env": {
+        "MCP_GMAIL_CREDENTIALS_PATH": "credentials.json",
+        "MCP_GMAIL_TOKEN_PATH": "token.json"
+      }
+    }
+  }
+}
